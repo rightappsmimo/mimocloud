@@ -17,8 +17,11 @@ class SmsBlastService
     public function sendBlast(SmsBlast $blast, $recipientIds = [])
     {
         try {
-            $blast->update(['status' => SmsBlast::STATUS_SENDING]);
-
+            if(!$blast->status === SmsBlast::STATUS_SENDING)
+            {
+                $blast->update(['status' => SmsBlast::STATUS_SENDING]);
+            }
+            
             $recipients = $this->getRecipients($blast, $recipientIds);
 
             if ($recipients->isEmpty()) {
@@ -91,11 +94,22 @@ class SmsBlastService
      */
     public function processScheduledBlasts()
     {
-        $blasts = SmsBlast::scheduled()
+        $blasts = SmsBlast::where('status', SmsBlast::STATUS_SCHEDULED)
             ->where('scheduled_at', '<=', Carbon::now())
             ->get();
 
         foreach ($blasts as $blast) {
+
+            $updated = SmsBlast::where('id', $blast->id)
+                ->where('status', SmsBlast::STATUS_SCHEDULED)
+                ->update([
+                    'status' => SmsBlast::STATUS_SENDING
+                ]);
+
+            if (!$updated) {
+                continue;
+            }
+
             $this->sendBlast($blast);
         }
 

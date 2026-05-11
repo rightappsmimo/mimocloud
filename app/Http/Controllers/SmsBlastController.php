@@ -35,7 +35,7 @@ class SmsBlastController extends Controller
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
-        
+
         $blasts = $query->paginate(20)->withQueryString();
 
         $stats = [
@@ -72,8 +72,8 @@ class SmsBlastController extends Controller
         {
             $dateTimeEx = $data['scheduled_date'] . ' ' . $data['scheduled_time'];
             $recipients = $request->validated('recipient_ids', []) ? count($data['recipient_ids']) : 0;
-            
-            $blast = SmsBlast::create([
+
+            $castRequests = [
                 'title' => $data['title'],
                 'message' => $data['message'],
                 'status' => SmsBlast::STATUS_DRAFT,
@@ -81,8 +81,18 @@ class SmsBlastController extends Controller
                 'total_recipients' => $recipients,
                 'type' => $data['type'],
                 'send_mode' => $data['send_mode'],
-                'schedule_at' => $dateTimeEx,
-            ]);
+                'scheduled_at' => 'unknown',
+            ];
+
+            $blast = SmsBlast::where('slug', $data['slug'])->first();
+
+            if($blast)
+            {
+                $blast->update($castRequests);
+            } else
+            {
+                $blast = SmsBlast::create($castRequests);
+            }
 
             $result = [
                 'success' => false,
@@ -112,7 +122,7 @@ class SmsBlastController extends Controller
                     'error' => 'Failed to send SMS blast: ' . ($result['message'] ?? 'Unknown error'),
                 ]);
             }
-            
+
         } catch(\Exception $e) {
             DB::rollback();
             return back()->withErrors([
@@ -146,7 +156,7 @@ class SmsBlastController extends Controller
      */
     public function templates()
     {
-        
+
     }
 
     /**
@@ -154,7 +164,7 @@ class SmsBlastController extends Controller
      */
     public function resendFailed(SmsBlast $smsBlast)
     {
-        
+
     }
 
     /**
@@ -162,6 +172,6 @@ class SmsBlastController extends Controller
      */
     public function destroy(SmsBlast $smsBlast)
     {
-        
+
     }
 }

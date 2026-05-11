@@ -4,9 +4,13 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\OrderItems;
+use App\Models\SmsBlast;
 use App\Models\M06;
 use Carbon\Carbon;
+use App\Services\SmsBlastService;
 use App\Services\SendSmsService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class Notify10MinutesBeforeTimeOut extends Command
 {
@@ -15,14 +19,14 @@ class Notify10MinutesBeforeTimeOut extends Command
      *
      * @var string
      */
-    protected $signature = 'app:check-timeouts';
+    protected $signature = 'sms:timeout-reminder';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Notify before 10 mins of time out';
+    protected $description = 'Send 10-minute timeout reminder SMS (uses SMS Blast automation)';
 
     /**
      * Execute the console command.
@@ -54,12 +58,12 @@ class Notify10MinutesBeforeTimeOut extends Command
 
         $notifications = [];
 
-        foreach ($items as $item) 
+        foreach ($items as $item)
         {
             $parent = $item->child->updatedby;
             if (!$parent) continue;
 
-            if (!isset($notifications[$parent])) 
+            if (!isset($notifications[$parent]))
             {
                 $notifications[$parent] = [];
             }
@@ -67,18 +71,18 @@ class Notify10MinutesBeforeTimeOut extends Command
             $notifications[$parent][] = $item->child;
         }
 
-        foreach ($notifications as $parent => $children) 
+        foreach ($notifications as $parent => $children)
         {
             $childrenNames = [];
             $guardianMap = [];
             $parentData = M06::where('d_name', $parent)->select('mobileno', 'lastname')->first();
 
-            foreach ($children as $child) 
+            foreach ($children as $child)
             {
                 $childrenNames[] = $child->firstname . ' ' . $parentData->lastname;
 
                 $latestGuardian = $child->guardians->first();
-                if ($latestGuardian && $latestGuardian->guardianauthorized) 
+                if ($latestGuardian && $latestGuardian->guardianauthorized)
                 {
                     $guardianMap[$latestGuardian->d_name][] = $child->firstname;
                 }
@@ -87,7 +91,7 @@ class Notify10MinutesBeforeTimeOut extends Command
             $childrenString = implode("\n\t", $childrenNames);
 
             $guardianMessages = [];
-            foreach ($guardianMap as $guardianName => $childNames) 
+            foreach ($guardianMap as $guardianName => $childNames)
             {
                 $childList = implode("\n\t", $childNames);
                 $guardianMessages[] = "{$guardianName} can pick up {$childList}";
@@ -99,15 +103,15 @@ class Notify10MinutesBeforeTimeOut extends Command
             $message .= "{$parent}, your children:\n";
             $message .= "\t{$childrenString} \n\n";
             $message .= "They will be ready for pick up.";
-            // if (!empty($guardianString)) 
+            // if (!empty($guardianString))
             // {
             //     $message .= "\n\n{$guardianString}";
             // }
 
             $message = mb_convert_encoding($message, 'ASCII', 'UTF-8');
-            
+
             $this->sendNotification($message, $parentData->mobileno);
-            
+
         }
         $sendNotifications = OrderItems::whereIn('id', $items->pluck('id'))->update(['notified_timeout' => true]);
 
@@ -121,4 +125,5 @@ class Notify10MinutesBeforeTimeOut extends Command
         $this->info("\nSMS response: {$response['response']}\n");
         return true;
     }
+
 }

@@ -21,15 +21,20 @@ class RunCommandsViaHttp extends Controller
         $logs[] = "Scheduler started at: " . $start;
 
         try {
-            Artisan::call('app:check-timeouts');
-            $logs[] = "app:check-timeouts executed";
+            $this->commandCall(
+                'otp:clean-expired', 
+                "otp:clean-expired executed"
+            );
 
-            $logs[] = Artisan::output();
+            $this->commandCall(
+                'sms:process-scheduled-blasts', 
+                "sms:process-scheduled-blasts executed"
+            );
 
-            Artisan::call('otp:clean-expired');
-            $logs[] = "otp:clean-expired executed";
-
-            $logs[] = Artisan::output();
+            $this->commandCall(
+                'sms:timeout-reminder', 
+                "sms:timeout-reminder executed"
+            );
 
         } catch (\Exception $e) {
             $logs[] = "Error: " . $e->getMessage();
@@ -42,5 +47,13 @@ class RunCommandsViaHttp extends Controller
         Log::info('Scheduler run', $logs);
 
         return response("<pre>" . implode("\n", $logs) . "</pre>");
+    }
+
+    private function commandCall($command, $log)
+    {
+        Artisan::call($command);
+        $logs[] = $log;
+
+        $logs[] = Artisan::output();
     }
 }
