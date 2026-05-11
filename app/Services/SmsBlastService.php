@@ -21,7 +21,7 @@ class SmsBlastService
             {
                 $blast->update(['status' => SmsBlast::STATUS_SENDING]);
             }
-            
+
             $recipients = $this->getRecipients($blast, $recipientIds);
 
             if ($recipients->isEmpty()) {
@@ -36,7 +36,7 @@ class SmsBlastService
 
             foreach ($recipients as $recipient) {
                 $result = $this->sendToRecipient($blast, $recipient);
-                
+
                 if ($result['success']) {
                     $sent++;
                 } else {
@@ -96,6 +96,7 @@ class SmsBlastService
     {
         $blasts = SmsBlast::where('status', SmsBlast::STATUS_SCHEDULED)
             ->where('scheduled_at', '<=', Carbon::now())
+            ->where('type', 'campaign')
             ->get();
 
         foreach ($blasts as $blast) {
@@ -129,7 +130,7 @@ class SmsBlastService
 
         // If no specific recipients, use all from blast recipients table
         $recipientIds = $blast->recipients()->pluck('recipient_id')->toArray();
-        
+
         if (empty($recipientIds)) {
             return collect();
         }
@@ -208,7 +209,7 @@ class SmsBlastService
     {
         // Get first child if available for variables
         $child = M06Child::where('d_code', $recipient->d_code)->first();
-        
+
         $replacements = [
             '{child_name}' => $child ? $child->firstname : '',
             '{parent_name}' => $recipient->d_name ?? '',

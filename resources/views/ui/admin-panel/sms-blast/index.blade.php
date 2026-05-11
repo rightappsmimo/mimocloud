@@ -61,7 +61,7 @@
     <div class="bg-white/70 backdrop-blur-lg rounded-xl shadow-sm border border-gray-200 p-4">
         <form method="GET" class="flex flex-wrap justify-end gap-4">
             <div class="min-w-[200px]">
-                <input type="text" name="search" value="{{ request('search') }}" placeholder="Search blasts..." 
+                <input type="text" name="search" value="{{ request('search') }}" placeholder="Search blasts..."
                     class="w-80 px-4 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <select name="status" class="px-4 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -121,7 +121,7 @@
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="flex items-center gap-2">
                             <div class="progress-bar w-20">
-                                <div class="progress-fill @if($blast->success_rate >= 90) bg-green-500 @elseif($blast->success_rate >= 50) bg-yellow-500 @else bg-red-500 @endif" 
+                                <div class="progress-fill @if($blast->success_rate >= 90) bg-green-500 @elseif($blast->success_rate >= 50) bg-yellow-500 @else bg-red-500 @endif"
                                     style="width: {{ min($blast->success_rate, 100) }}%"></div>
                             </div>
                             <span class="text-xs font-medium">{{ $blast->success_rate }}%</span>
@@ -132,7 +132,7 @@
                             <i class="fas fa-eye"></i>
                         </a>
                         @if ($blast->status === 'sent' || $blast->status === 'failed')
-                            <button class="text-green-600 hover:text-green-900 mr-3" 
+                            <button class="text-green-600 hover:text-green-900 mr-3"
                                 onclick="resendFailed({{ $blast->id }})" title="Resend to failed">
                                 <i class="fas fa-redo"></i>
                             </button>
@@ -173,3 +173,44 @@
         {{ $blasts->links() }}
     </div>
 </div>
+
+<script>
+    function resendFailed(blastId) {
+        if (!confirm('Resend to all failed recipients?')) return;
+
+        window.axios.post(`/admin-panel/sms-blasts/${blastId}/resend`, {}, {
+            headers: {
+                'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            }
+        })
+        .then(response => {
+            const data = response.data;
+            console.log(data);
+
+            if (data.success) {
+                Swal.fire({
+                    title: "Complete",
+                    text: `Resend complete: ${data.sent} sent, ${data.failed} failed`,
+                    icon: "success"
+                });
+                location.reload();
+            } else {
+                Swal.fire({
+                    icon: "error",
+                    title: "Error",
+                    text: (data.message || 'Unknown error'),
+                });
+            }
+        })
+        .catch(error => {
+            Swal.fire({
+                icon: "error",
+                title: "Network error",
+                text: 'something went wrong',
+            });
+            console.error(error);
+        });
+    }
+</script>

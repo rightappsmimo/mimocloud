@@ -14,6 +14,7 @@
 
         <!-- Scripts -->
         @vite(['resources/css/app.css', 'resources/js/admin-app.js'])
+{{--        <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>--}}
         <script>
             window.currentRoute = "{{ Route::currentRouteName() }}"
         </script>

@@ -160,47 +160,62 @@ class SmsBlastController extends Controller
      */
     public function resendFailed(SmsBlast $smsBlast)
     {
-        $failedRecipients = $smsBlast->recipients()
-            ->where('status', SmsBlastRecipient::STATUS_FAILED)
-            ->get();
+        try
+        {
+            $failedRecipients = $smsBlast->recipients()
+                ->where('status', SmsBlastRecipient::STATUS_FAILED)
+                ->get();
 
-        if ($failedRecipients->isEmpty()) {
-            return back()->with('error', 'No failed recipients to resend.');
-        }
+            if ($failedRecipients->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'No failed recipients to resend.'
+                ]);
+            }
 
-        $sent = 0;
-        $failed = 0;
+            $sent = 0;
+            $failed = 0;
 
-        foreach ($failedRecipients as $recipient) {
-            $m06 = M06::where('d_code', $recipient->recipient_id)->first();
-            if ($m06) {
-                $message = $this->smsBlastService->prepareMessage($smsBlast->message, $m06);
-                $result = SendSmsService::sendnowsms($m06->mobileno, $message);
+            foreach ($failedRecipients as $recipient) {
+                $m06 = M06::where('d_code', $recipient->recipient_id)->first();
+                if ($m06) {
+                    $message = $this->smsBlastService->prepareMessage($smsBlast->message, $m06);
+                    $result = SendSmsService::sendnowsms($m06->mobileno, $message);
 
-                if ($result['success']) {
-                    $recipient->update([
-                        'status' => SmsBlastRecipient::STATUS_SENT,
-                        'sent_at' => Carbon::now(),
-                        'error_message' => null,
-                    ]);
-                    $sent++;
-                } else {
-                    $recipient->update([
-                        'error_message' => $result['response'],
-                    ]);
-                    $failed++;
+                    if ($result['success']) {
+                        $recipient->update([
+                            'status' => SmsBlastRecipient::STATUS_SENT,
+                            'sent_at' => Carbon::now(),
+                            'error_message' => null,
+                        ]);
+                        $sent++;
+                    } else {
+                        $recipient->update([
+                            'error_message' => $result['response'],
+                        ]);
+                        $failed++;
+                    }
                 }
             }
+
+            // Update blast stats
+            $smsBlast->update([
+                'sent_count' => $smsBlast->sent_count + $sent,
+                'failed_count' => $smsBlast->failed_count - $sent + $failed,
+                'status' => ($failed > 0) ? SmsBlast::STATUS_FAILED : SmsBlast::STATUS_SENT,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Resend complete: $sent sent, $failed failed.",
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ]);
         }
-
-        // Update blast stats
-        $smsBlast->update([
-            'sent_count' => $smsBlast->sent_count + $sent,
-            'failed_count' => $smsBlast->failed_count - $sent + $failed,
-            'status' => ($failed > 0) ? SmsBlast::STATUS_FAILED : SmsBlast::STATUS_SENT,
-        ]);
-
-        return back()->with('success', "Resend complete: $sent sent, $failed failed.");
     }
 
     /**

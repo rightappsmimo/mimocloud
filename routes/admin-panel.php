@@ -29,7 +29,7 @@ Route::prefix('admin-panel')->middleware('auth')->group(function () {
         Route::post('/', [SmsBlastController::class, 'store'])->name('store');
         Route::get('/{smsBlast}', [SmsBlastController::class, 'show'])->name('show');
         Route::get('/edit/{smsBlast}', [SmsBlastController::class, 'edit'])->name('edit');
-        Route::get('/{smsBlast}/resend', [SmsBlastController::class, 'resendFailed'])->name('resend-failed');
+        Route::post('/{smsBlast}/resend', [SmsBlastController::class, 'resendFailed'])->name('resend-failed');
         Route::delete('/{smsBlast}', [SmsBlastController::class, 'destroy'])->name('destroy');
         Route::get('/templates', [SmsBlastController::class, 'templates'])->name('templates');
     });
