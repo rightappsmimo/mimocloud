@@ -16,7 +16,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withSchedule(function (Schedule $schedule): void {
         $schedule->command('otp:clean-expired')->everyThirtySeconds();
-        $schedule->command('app:check-timeouts')->everyThirtySeconds();
+        $schedule->command('sms:timeout-reminder')->everyThirtySeconds();
+        $schedule->command('sms:checkout-reminder')->everyThirtySeconds();
     })
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([

@@ -5,38 +5,33 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\OrderItems;
 use App\Models\SmsBlast;
-use App\Models\M06;
-use Carbon\Carbon;
 use App\Services\SmsBlastService;
-use App\Services\SendSmsService;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-
-class Notify10MinutesBeforeTimeOut extends Command
+use Carbon\Carbon;
+class NotifyOvertimes extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'sms:timeout-reminder';
+    protected $signature = 'sms:overtime-reminder';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Send automatic timeout reminder SMS';
+    protected $description = 'Send automatically overtime reminder';
 
     /**
      * Execute the console command.
      */
     public function handle(SmsBlastService $smsBlastService)
     {
-        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_TIMEOUT);
+        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_OVERTIME);
         if (!$blast)
         {
-            $this->error('Timeout reminder blast not found.');
+            $this->error('Overtime reminder blast not found.');
 
             return 1;
         }
@@ -76,10 +71,10 @@ class Notify10MinutesBeforeTimeOut extends Command
 
         OrderItems::whereIn('id', $items->pluck('id'))
             ->update([
-                'notified_timeout' => true
+                'notified_overtime' => true
             ]);
 
-        $this->info("Timeout reminders processed.");
+        $this->info("Overtime reminders processed.");
         $this->info("Sent: {$result['sent']}");
         $this->info("Failed: {$result['failed']}");
 
@@ -91,27 +86,25 @@ class Notify10MinutesBeforeTimeOut extends Command
         $now = Carbon::now();
 
         $items = OrderItems::with(['child.parent'])
-            ->where(function ($query) use ($now) {
-                $query->whereRaw(
-                    "ckin + (durationhours * interval '1 hour') BETWEEN ? AND ?",
-                    [
-                        $now,
-                        $now->copy()->addMinutes(10)
-                    ]
-                );
-            })
+            ->whereRaw(
+                "ckin + (durationhours * interval '1 hour') <= ?",
+                [$now]
+            )
+            ->whereRaw(
+                "ckin + (durationhours * interval '1 hour') >= ?",
+                [$now->copy()->subHour()]
+            )
             ->where('checked_out', false)
-            ->where('notified_timeout', false)
+            ->where('notified_overtime', false)
             ->where('durationhours', '!=', 5)
             ->get();
 
         if ($items->isEmpty())
         {
-            $this->info('No timeout reminders.');
+            $this->info('No overtime reminders.');
             return [];
         }
 
         return $items;
     }
-
 }

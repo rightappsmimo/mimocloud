@@ -3,40 +3,37 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use App\Models\OrderItems;
 use App\Models\SmsBlast;
-use App\Models\M06;
+use App\Models\M06Child;
 use Carbon\Carbon;
 use App\Services\SmsBlastService;
-use App\Services\SendSmsService;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-class Notify10MinutesBeforeTimeOut extends Command
+class NotifyBirthdays extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'sms:timeout-reminder';
+    protected $signature = 'sms:birthday-greetings';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Send automatic timeout reminder SMS';
+    protected $description = 'Send automatically birthdays notifications';
 
     /**
      * Execute the console command.
      */
     public function handle(SmsBlastService $smsBlastService)
     {
-        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_TIMEOUT);
+        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_BIRTHDAY);
         if (!$blast)
         {
-            $this->error('Timeout reminder blast not found.');
+            $this->error('Birthday greeting blast not found.');
 
             return 1;
         }
@@ -51,7 +48,7 @@ class Notify10MinutesBeforeTimeOut extends Command
 
         foreach ($items as $item)
         {
-            $parent = $item->child->parent;
+            $parent = $item->parent;
 
             if (!$parent || !$parent->mobileno) {
                 continue;
@@ -74,12 +71,7 @@ class Notify10MinutesBeforeTimeOut extends Command
             $recipientIds
         );
 
-        OrderItems::whereIn('id', $items->pluck('id'))
-            ->update([
-                'notified_timeout' => true
-            ]);
-
-        $this->info("Timeout reminders processed.");
+        $this->info("Birthday greetings processed.");
         $this->info("Sent: {$result['sent']}");
         $this->info("Failed: {$result['failed']}");
 
@@ -88,30 +80,17 @@ class Notify10MinutesBeforeTimeOut extends Command
 
     private function querySessions()
     {
-        $now = Carbon::now();
-
-        $items = OrderItems::with(['child.parent'])
-            ->where(function ($query) use ($now) {
-                $query->whereRaw(
-                    "ckin + (durationhours * interval '1 hour') BETWEEN ? AND ?",
-                    [
-                        $now,
-                        $now->copy()->addMinutes(10)
-                    ]
-                );
-            })
-            ->where('checked_out', false)
-            ->where('notified_timeout', false)
-            ->where('durationhours', '!=', 5)
+        $today = Carbon::now();
+        $children = M06Child::with('parent')
+            ->whereMonth('birthday', $today->month)
+            ->whereDay('birthday', $today->day)
             ->get();
 
-        if ($items->isEmpty())
-        {
-            $this->info('No timeout reminders.');
+        if ($children->isEmpty()) {
+            $this->info('No birthdays today.');
             return [];
         }
 
-        return $items;
+        return $children;
     }
-
 }

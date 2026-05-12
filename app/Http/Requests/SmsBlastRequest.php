@@ -29,7 +29,7 @@ class SmsBlastRequest extends FormRequest
             'send_mode' => 'required|string|max:50',
             'scheduled_date' => 'nullable|date',
             'scheduled_time' => 'nullable|date_format:H:i',
-            'recipient_ids' => 'nullable|array',
+            'recipient_ids' => 'sometimes|nullable|array',
             'recipient_ids.*' => 'string|max:12',
         ];
     }

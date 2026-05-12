@@ -148,7 +148,84 @@ class SmsBlastController extends Controller
      */
     public function edit(SmsBlast $smsBlast)
     {
-        dd($smsBlast);
+        $templates = $this->smsBlastService->getDefaultTemplates();
+        $parents = M06::where('isparent', true)->whereNotNull('mobileno')->get();
+        $guardians = M06::where('isguardian', true)->whereNotNull('mobileno')->get();
+
+        // Get selected recipient IDs from the blast's recipients
+        $selectedIds = $smsBlast->recipients()->pluck('recipient_id')->toArray();
+
+        return view($this->page, compact('smsBlast', 'templates', 'parents', 'guardians', 'selectedIds'));
+    }
+
+    /**
+     * Update existing SMS blast
+     */
+    public function update(SmsBlastRequest $request, SmsBlast $smsBlast)
+    {
+        $data = $request->validated();
+
+        DB::beginTransaction();
+
+        try
+        {
+            $dateTimeEx = $data['scheduled_date'] . ' ' . $data['scheduled_time'];
+            $recipients = $request->validated('recipient_ids', []) ? count($data['recipient_ids']) : 0;
+
+            $castRequests = [
+                'title' => $data['title'],
+                'message' => $data['message'],
+                'slug' => $data['slug'],
+                'total_recipients' => $recipients,
+                'type' => $data['type'],
+                'send_mode' => $data['send_mode'],
+            ];
+
+            // Reset status to draft on edit
+            if ($smsBlast->status !== 'draft') {
+                $castRequests['status'] = SmsBlast::STATUS_DRAFT;
+            }
+
+            $smsBlast->update($castRequests);
+
+            // Detach existing recipients
+            $smsBlast->recipients()->delete();
+
+            $result = [
+                'success' => false,
+                'message' => 'Unknown error'
+            ];
+
+            switch($smsBlast->send_mode)
+            {
+                case 'scheduled':
+                    $result = $this->smsBlastService->scheduleBlast($smsBlast, $data['recipient_ids'], $dateTimeEx);
+                    break;
+                case 'now':
+                    $result = $this->smsBlastService->sendBlast($smsBlast, $data['recipient_ids']);
+                    break;
+                case 'alltimes':
+                    $result = ['success' => true];
+                    break;
+            }
+
+            if ($result['success']) {
+                DB::commit();
+                return redirect()->route('sms_blast.index')
+                    ->with('success', 'SMS blast updated and ' . ($smsBlast->status === 'scheduled' ? 'scheduled' : 'sent') . ' successfully!');
+            } else {
+                DB::rollBack();
+                return back()->withErrors([
+                    'error' => 'Failed to update SMS blast: ' . ($result['message'] ?? 'Unknown error'),
+                ]);
+            }
+
+        } catch(\Exception $e) {
+            DB::rollback();
+            return back()->withErrors([
+                'error' => 'Error: '. $e->getMessage(),
+            ]);
+        }
     }
 
     /**

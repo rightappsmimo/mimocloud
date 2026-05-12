@@ -16,6 +16,8 @@
                     @include('ui.admin-panel.sms-blast.create')
                 @elseif(request()->routeIs('sms_blast.show') && app()->environment('local'))
                     @include('ui.admin-panel.sms-blast.details')
+                @elseif(request()->routeIs('sms_blast.edit') && app()->environment('local'))
+                    @include('ui.admin-panel.sms-blast.edit')
                 @endif
             @endif
         </div>

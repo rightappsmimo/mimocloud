@@ -38,14 +38,11 @@ class SmsBlast extends Model
     const STATUS_SENT = 'sent';
     const STATUS_FAILED = 'failed';
     const STATUS_CANCELLED = 'cancelled';
-
-    protected $slugs = [
-        'birthday-greetings',
-        'timeout-reminder',
-        'overtime-reminder',
-        'checkout-reminder',
-        'custom'
-    ];
+    const SLUG_BIRTHDAY = 'birthday-greetings';
+    const SLUG_TIMEOUT = 'timeout-reminder';
+    const SLUG_OVERTIME = 'overtime-reminder';
+    const SLUG_CHECKOUT = 'checkout-reminder';
+    const SLUG_CUSTOM = 'custom';
 
     public function recipients(): HasMany
     {
@@ -70,5 +67,15 @@ class SmsBlast extends Model
     public function scopeFailed($query)
     {
         return $query->where('status', self::STATUS_FAILED);
+    }
+
+    public function scopeAutomation($query)
+    {
+        return $query->where('type', 'automation');
+    }
+
+    public static function getAutomatedBlast(string $slug): ?self
+    {
+        return self::automation()->firstWhere('slug', $slug);
     }
 }

@@ -5,38 +5,34 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\OrderItems;
 use App\Models\SmsBlast;
-use App\Models\M06;
-use Carbon\Carbon;
 use App\Services\SmsBlastService;
-use App\Services\SendSmsService;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
-class Notify10MinutesBeforeTimeOut extends Command
+class NotifyCheckouts extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'sms:timeout-reminder';
+    protected $signature = 'sms:checkout-reminder';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Send automatic timeout reminder SMS';
+    protected $description = 'Send automatically checkout reminders';
 
     /**
      * Execute the console command.
      */
     public function handle(SmsBlastService $smsBlastService)
     {
-        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_TIMEOUT);
+        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_CHECKOUT);
         if (!$blast)
         {
-            $this->error('Timeout reminder blast not found.');
+            $this->error('Checkout reminder blast not found.');
 
             return 1;
         }
@@ -76,10 +72,10 @@ class Notify10MinutesBeforeTimeOut extends Command
 
         OrderItems::whereIn('id', $items->pluck('id'))
             ->update([
-                'notified_timeout' => true
+                'notified_checkout' => true
             ]);
 
-        $this->info("Timeout reminders processed.");
+        $this->info("Checkout reminders processed.");
         $this->info("Sent: {$result['sent']}");
         $this->info("Failed: {$result['failed']}");
 
@@ -96,22 +92,21 @@ class Notify10MinutesBeforeTimeOut extends Command
                     "ckin + (durationhours * interval '1 hour') BETWEEN ? AND ?",
                     [
                         $now,
-                        $now->copy()->addMinutes(10)
+                        $now->copy()->addMinute()
                     ]
                 );
             })
             ->where('checked_out', false)
-            ->where('notified_timeout', false)
+            ->where('notified_checkout', false)
             ->where('durationhours', '!=', 5)
             ->get();
 
         if ($items->isEmpty())
         {
-            $this->info('No timeout reminders.');
+            $this->info('No checkout reminders.');
             return [];
         }
 
         return $items;
     }
-
 }
