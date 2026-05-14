@@ -1,688 +1,531 @@
-# SMS Blast Automation Ideas - Scheduler Integration
+# SMS Automation Module - Development Documentation
 
-## Executive Summary
-
-This document outlines automation opportunities for the existing SMS blast module. The current implementation supports manual sending and scheduled blasts via the admin panel, but lacks automated, event-driven SMS notifications that would enhance user experience and operational efficiency.
-
----
-
-## Current System Overview
-
-### Existing Architecture
-
-```
-SmsBlast (Model)
-├── status: draft | scheduled | sending | sent | failed | cancelled
-├── send_mode: now | scheduled | alltimes
-├── scheduled_at: datetime
-└── recipients() → SmsBlastRecipient
-
-SmsBlastRecipient (Model)
-├── status: pending | sent | failed
-└── recipient: M06 (parent/guardian)
-
-SmsBlastService
-├── sendBlast()       - Immediate sending
-├── scheduleBlast()   - Schedule for future
-└── processScheduledBlasts() - Polls scheduled blasts
-
-SendSmsService
-└── sendnowsms()      - iSMS Malaysia API wrapper
-
-Routes: admin-panel.php sms-blasts.*
-Controller: SmsBlastController
-```
-
-### Existing Automation Example
-
-**Notify10MinutesBeforeTimeOut Command** (`app:check-timeouts`):
-- Runs via scheduler
-- Queries `OrderItems` where checkout is within 10 minutes
-- Sends SMS to parents/guardians
-- Marks `notified_timeout` flag to prevent duplicate sends
+**Date:** May 2026  
+**Developer:** [To be filled]  
+**Project:** Mimo Play Cafe - SMS Blast Automation System
 
 ---
 
-## Automation Opportunities
-
-### 1. Auto-Checkout Reminder (ALREADY EXISTS)
-
-**Status:** ✅ Implemented
-
-**Command:** `app:check-timeouts`
-
-**Frequency:** Every 5-10 minutes
-
-**Logic:**
-- Finds order items ending within 10 minutes
-- Groups by parent
-- Sends consolidated SMS
-- Sets `notified_timeout = true` to prevent duplicates
-
-**Improvement Suggestions:**
-- Move from `OrderItems` model to a dedicated `SmsQueue` or `NotificationLog` table
-- Add retry mechanism for failed SMS
-- Add template selection in admin panel
-- Include guardian notifications (currently commented out)
+## Table of Contents
+1. [Foundation Layer](#phase-1-foundation-layer)
+2. [Database Migration](#phase-2-database-migration)
+3. [Model Implementation](#phase-3-model-implementation)
+4. [Service Layer](#phase-4-service-layer)
+5. [Console Commands](#phase-5-console-commands)
+6. [HTTP Scheduler Layer](#phase-6-http-scheduler-layer)
+7. [Controller Layer](#phase-7-controller-layer)
+8. [API Integration](#phase-8-api-integration)
+9. [Frontend Integration](#phase-9-frontend-integration)
 
 ---
 
-### 2. Birthday Greetings Automation
+## Phase 1: Foundation Layer
 
-**Business Value:** Customer retention, personal touch
+### Models Structure
 
-**Frequency:** Daily at 6:00 AM
+**File:** `app/Models/SmsBlast.php`
 
-**Trigger:** Child's birthday (from `M06.dob` or `M06Child.birthdate`)
-
-**Proposed Command:** `sms:birthday-greetings`
-
-**Logic Flow:**
-1. Query children with birthday = today
-2. Get associated parent/guardian (`M06.d_code` link)
-3. Retrieve "birthday-greetings" template
-4. Replace `{child_name}` placeholder
-5. Send via `SendSmsService::sendnowsms()`
-6. Log in `sms_blast` table for tracking
-
-**Database Considerations:**
-```sql
--- Might need to add birthdate field if not present
-ALTER TABLE m06 ADD COLUMN birthdate DATE;
--- or use M06Child table
-SELECT c.*, p.d_name AS parent_name, p.mobileno 
-FROM m06_child c 
-JOIN m06 p ON c.d_code = p.d_code 
-WHERE DATE(c.birthdate) = CURDATE();
-```
-
-**Prevention of Duplicates:**
-- Use a `notification_log` table with (`child_id`, `notification_type`, `date`)
-- Check before sending to avoid re-sending if command runs multiple times
-
----
-
-### 3. First-Time Visitor Follow-Up
-
-**Business Value:** Gather feedback, encourage repeat visits
-
-**Frequency:** Daily at 4:00 PM (day after first visit)
-
-**Trigger:** First `OrderItems` record for a child in last 24 hours
-
-**Proposed Command:** `sms:follow-up-first-visit`
-
-**Logic Flow:**
-1. Find children with first visit yesterday
-2. Get parent contact
-3. Use custom "Thank You" template
-4. Send appreciation message + upcoming promotions
-
-**Edge Cases:**
-- Distinguish between first visit and subsequent visits
-- Exclude test accounts or staff children
-- Optional opt-out mechanism (add `sms_opt_out` column to `M06`)
-
----
-
-### 4. Inactive Customer Reactivation
-
-**Business Value:** Win back lapsed customers
-
-**Frequency:** Weekly (every Monday)
-
-**Trigger:** No visits in last 30+ days
-
-**Proposed Command:** `sms:reactivation-campaign`
-
-**Logic Flow:**
-1. Query `M06` where child has no order items in last 30 days
-2. Filter active customers (not already marked `inactive` or `opted_out`)
-3. Send "We Miss You" message with special discount code
-4. Track response to measure campaign effectiveness
-
-**Query Example:**
-```sql
-SELECT m.* 
-FROM m06 m
-WHERE NOT EXISTS (
-    SELECT 1 FROM order_items oi 
-    WHERE oi.d_code = m.d_code 
-    AND oi.ckin >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-)
-AND m.sms_opt_out = 0;
-```
-
----
-
-### 5. Session Extension / Overtime Alerts
-
-**Status:** 🚀 New Feature
-
-**Frequency:** Every 15 minutes
-
-**Trigger:** Child session exceeded allocated duration
-
-**Current Implementation:** 
-- `Notify10MinutesBeforeTimeOut` handles 10-minute warning
-- No current handling for actual overtime
-
-**Proposed Command:** `sms:overtime-alerts`
-
-**Logic Flow:**
-1. Find `OrderItems` where `ckin + (durationhours * interval)` < NOW()
-2. Filter `checked_out = false`
-3. Group by parent
-4. Send overtime notice with `{minutes_over}` variable
-5. Optional: Escalate if > 30 minutes (call parent)
-
----
-
-### 6. Weekly Play Session Summary
-
-**Business Value:** Engagement, data-driven messaging
-
-**Frequency:** Every Monday morning
-
-**Trigger:** Summary of previous week's activities
-
-**Proposed Command:** `sms:weekly-summary`
-
-**Logic Flow:**
-1. Gather stats per family:
-   - Total visits last week
-   - Total play hours
-   - New milestones achieved
-2. Personalize message per parent
-3. Send "Here's What Your Child Enjoyed Last Week" message
-
-**Data Sources:**
-- `order_items` table aggregated
-- `M06Child` details for personalization
-
----
-
-### 7. Seasonal Promotions & Holiday Campaigns
-
-**Business Value:** Revenue generation
-
-**Frequency:** Configurable (one-time or recurring)
-
-**Trigger:** Admin-defined date ranges
-
-**Implementation Path:**
-
-**Option A - Simple Config File:**
 ```php
-// config/sms_campaigns.php
-return [
-    ' campaigns' => [
-        'christmas-2026' => [
-            'start_date' => '2026-12-01',
-            'end_date' => '2026-12-24',
-            'template' => 'holiday-christmas',
-            'target' => 'all_active',
-        ],
-        'summer-special' => [
-            'schedule' => '0 9 * 6-8 *', // June-August, 9 AM daily
-            'template' => 'summer-promo',
-        ]
-    ]
-];
-```
+<?php
+namespace App\Models;
 
-**Option B - Database Table (Recommended):**
-```php
-// Migration
-Schema::create('sms_campaigns', function (Blueprint $table) {
-    $table->id();
-    $table->string('name');
-    $table->string('template_type');
-    $table->enum('target_audience', ['all', 'active', 'inactive', 'custom']);
-    $table->json('target_filters')->nullable(); // Custom filters
-    $table->date('start_date');
-    $table->date('end_date')->nullable();
-    $table->time('send_time')->default('09:00:00');
-    $table->boolean('is_active')->default(true);
-    $table->timestamps();
-});
-```
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
-**Command:** `sms:run-campaigns`
-
-Runs every hour, checks for active campaigns with scheduled send time, processes eligible recipients.
-
----
-
-### 8. Reservation Reminders (if booking system exists)
-
-**Business Value:** Reduce no-shows
-
-**Frequency:** Daily at 8:00 AM for same-day bookings
-
-**Trigger:** Bookings scheduled for today
-
-**Proposed Command:** `sms:reservation-reminders`
-
-**Logic:**
-- Query bookings with date = today and mobile number present
-- Send "We're excited to see you today at [time]" message
-- Include parking/check-in instructions
-
----
-
-### 9. Waitlist Notification
-
-**Business Value:** Fill cancelled slots, maximize capacity
-
-**Frequency:** Every 30 minutes during operational hours
-
-**Trigger:** Slot becomes available (cancellation or no-show)
-
-**Logic:**
-- Monitor `order_items` flagged as `cancelled` or `no_show`
-- Notify first 3-5 waitlisted families
-- Include "claim this slot" link/instructions
-
----
-
-### 10. Recurring Scheduled Blasts Monitor
-
-**Status:** 🛠 Infrastructure Improvement
-
-**Current Issue:** `processScheduledBlasts()` exists but needs to be invoked
-
-**Proposed Implementation:**
-
-**Artisan Command:**
-```bash
-php artisan sms:process-scheduled
-```
-
-**Kernel Registration:**
-```php
-// app/Console/Kernel.php
-protected function schedule(Schedule $schedule)
+class SmsBlast extends Model
 {
-    // Every minute check for blasts ready to send
-    $schedule->command('sms:process-scheduled')
-             ->everyMinute();
-    
-    // Or every 5 minutes to reduce load
-    $schedule->command('sms:process-scheduled')
-             ->everyFiveMinutes();
-}
-```
+    use HasFactory;
 
-**Enhancement:**
-- Add `last_attempt_at` timestamp to retry failed sends
-- Exponential backoff for API failures
-- Alert admin if >5 blasts fail consecutively
+    protected $fillable = [
+        'title', 'message', 'status', 'slug',
+        'total_recipients', 'sent_count', 'failed_count',
+        'type', 'send_mode', 'scheduled_at', 'sent_at',
+    ];
 
----
+    protected $casts = [
+        'scheduled_at' => 'datetime',
+        'sent_at' => 'datetime',
+        'total_recipients' => 'integer',
+        'sent_count' => 'integer',
+        'failed_count' => 'integer',
+    ];
 
-## Implementation Priority Matrix
+    // Status constants
+    const STATUS_DRAFT = 'draft';
+    const STATUS_SCHEDULED = 'scheduled';
+    const STATUS_SENDING = 'sending';
+    const STATUS_SENT = 'sent';
+    const STATUS_FAILED = 'failed';
+    const STATUS_CANCELLED = 'cancelled';
 
-| # | Feature | Effort | Impact | Priority |
-|---|---------|--------|--------|----------|
-| 1 | Birthday Greetings Auto-Send | Low | High | P1 |
-| 2 | Process Scheduled Blasts Daemon | Low | High | P1 |
-| 3 | Overtime Alerts | Low | Medium | P2 |
-| 4 | First-Time Follow-Up | Medium | High | P1 |
-| 5 | Inactive Reactivation | Medium | Medium | P3 |
-| 6 | Waitlist Notifications | High | Medium | P3 |
-| 7 | Weekly Summary | Medium | Low | P4 |
-| 8 | Seasonal Campaigns | High | High | P2 |
-| 9 | Reservation Reminders | Low | Medium | P2 |
+    // Slug constants for templates
+    const SLUG_BIRTHDAY = 'birthday-greetings';
+    const SLUG_TIMEOUT = 'timeout-reminder';
+    const SLUG_OVERTIME = 'overtime-reminder';
+    const SLUG_CHECKOUT = 'checkout-reminder';
+    const SLUG_CUSTOM = 'custom';
 
----
-
-## Technical Implementation Guide
-
-### 1. Create the Command Skeleton
-
-```bash
-php artisan make:command SendBirthdayGreetings
-```
-
-**Structure:**
-```php
-class SendBirthdayGreetings extends Command
-{
-    protected $signature = 'sms:birthday-greetings';
-    protected $description = 'Send automated birthday greetings';
-    
-    public function handle()
+    public function recipients(): HasMany
     {
-        // 1. Query recipients
-        // 2. Prepare messages
-        // 3. Send via SendSmsService
-        // 4. Log results
-        // 5. Output summary
+        return $this->hasMany(SmsBlastRecipient::class);
+    }
+
+    public function scopeScheduled($query)
+    {
+        return $query->where('status', self::STATUS_SCHEDULED);
+    }
+
+    public function scopeAutomation($query)
+    {
+        return $query->where('type', 'automation');
+    }
+
+    public static function getAutomatedBlast(string $slug): ?self
+    {
+        return self::automation()->firstWhere('slug', $slug);
     }
 }
 ```
 
-### 2. Use Existing SmsBlast Model (Recommended)
-
-Instead of creating new tables, leverage existing `sms_blasts`:
+**File:** `app/Models/SmsBlastRecipient.php`
 
 ```php
-$blast = SmsBlast::create([
-    'title' => 'Birthday Greetings - ' . date('Y-m-d'),
-    'message' => $personalizedMessage,
-    'status' => SmsBlast::STATUS_SENDING,
-    'slug' => 'birthday-greetings-auto',
-    'type' => 'automated',
-    'send_mode' => 'now',
-    'total_recipients' => $recipients->count(),
-]);
+<?php
+namespace App\Models;
 
-$result = $smsBlastService->sendBlast($blast, $recipientIds);
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class SmsBlastRecipient extends Model
+{
+    protected $fillable = [
+        'sms_blast_id', 'recipient_type', 'recipient_id',
+        'recipient_name', 'mobile_number', 'status',
+        'error_message', 'sent_at',
+    ];
+
+    protected $casts = [
+        'sent_at' => 'datetime',
+    ];
+
+    const STATUS_PENDING = 'pending';
+    const STATUS_SENT = 'sent';
+    const STATUS_FAILED = 'failed';
+    const DEFAULT_RECIPIENT_TYPE = 'parent';
+
+    public function smsBlast(): BelongsTo
+    {
+        return $this->belongsTo(SmsBlast::class);
+    }
+
+    public function recipient(): BelongsTo
+    {
+        return $this->belongsTo(M06::class, 'recipient_id', 'd_code');
+    }
+}
 ```
 
-**Benefits:**
-- Unified reporting in admin panel
-- Reuses existing tracking infrastructure
-- Audit trail retained
-- Can view failed messages in UI
+---
 
-### 3. Add Automation Metadata to SmsBlast
+## Phase 2: Database Migration
 
-Optional schema additions:
+**File:** `database/migrations/2026_04_27_000000_create_sms_blasts_table.php`
 
 ```php
-Schema::table('sms_blasts', function (Blueprint $table) {
-    $table->string('automation_type')->nullable()->after('send_mode');
-    $table->string('cron_schedule')->nullable()->after('automation_type');
-    $table->boolean('is_automated')->default(false)->after('cron_schedule');
-    $table->timestamp('last_run_at')->nullable()->after('is_automated');
+Schema::create('sms_blasts', function (Blueprint $table) {
+    $table->id();
+    $table->string('title');
+    $table->text('message');
+    $table->enum('status', ['draft', 'scheduled', 'sending', 'sent', 'failed', 'cancelled'])->default('draft');
+    $table->integer('total_recipients')->default(0);
+    $table->integer('sent_count')->default(0);
+    $table->integer('failed_count')->default(0);
+    $table->enum('type', ['automation', 'campaign'])->default('automation');
+    $table->string('slug')->nullable();
+    $table->enum('send_mode', ['now', 'scheduled', 'alltimes'])->default('alltimes');
+    $table->timestamp('scheduled_at')->nullable();
+    $table->timestamp('sent_at')->nullable();
+    $table->timestamps();
+    $table->index(['status', 'scheduled_at']);
+    $table->index('send_mode');
+    $table->index('type');
+});
+```
+
+**File:** `database/migrations/2026_04_27_000001_create_sms_blast_recipients_table.php`
+
+```php
+Schema::create('sms_blast_recipients', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('sms_blast_id')->constrained('sms_blasts')->onDelete('cascade');
+    $table->string('recipient_type')->default('parent');
+    $table->string('recipient_id');
+    $table->string('recipient_name');
+    $table->string('mobile_number');
+    $table->enum('status', ['pending', 'sent', 'failed'])->default('pending');
+    $table->text('error_message')->nullable();
+    $table->timestamp('sent_at')->nullable();
+    $table->timestamps();
+    $table->index(['sms_blast_id', 'status']);
+    $table->index('mobile_number');
 });
 ```
 
 ---
 
-## Scheduler Registration
+## Phase 3: Service Layer
+
+**File:** `app/Services/SmsBlastService.php`
+
+```php
+<?php
+namespace App\Services;
+
+use App\Models\SmsBlast;
+use App\Models\SmsBlastRecipient;
+use App\Models\M06;
+use App\Models\M06Child;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\RateLimiter;
+
+class SmsBlastService
+{
+    public function sendBlast(SmsBlast $blast, $recipientIds = [])
+    {
+        try {
+            if ($blast->status !== SmsBlast::STATUS_SENDING) {
+                $blast->update(['status' => SmsBlast::STATUS_SENDING]);
+            }
+
+            $recipients = $this->getRecipients($blast, $recipientIds);
+
+            if ($recipients->isEmpty()) {
+                $blast->update(['status' => SmsBlast::STATUS_FAILED]);
+                return ['success' => false, 'message' => 'No recipients found'];
+            }
+
+            $this->createRecipients($blast, $recipients);
+
+            $sent = 0;
+            $failed = 0;
+
+            foreach ($recipients as $recipient) {
+                RateLimiter::attempt(
+                    key: "sms-blast:{$blast->id}",
+                    maxAttempts: 50,
+                    callback: function () use ($blast, $recipient, &$sent, &$failed) {
+                        $result = $this->sendToRecipient($blast, $recipient);
+                        if ($result['success']) {
+                            $sent++;
+                        } else {
+                            $failed++;
+                        }
+                    },
+                    decaySeconds: 0.5
+                );
+            }
+
+            $blast->update([
+                'sent_count' => $sent,
+                'failed_count' => $failed,
+                'status' => $failed > 0 ? SmsBlast::STATUS_FAILED : SmsBlast::STATUS_SENT,
+                'sent_at' => Carbon::now(),
+            ]);
+
+            return ['success' => true, 'sent' => $sent, 'failed' => $failed, 'blast' => $blast];
+        } catch (\Exception $e) {
+            $blast->update(['status' => SmsBlast::STATUS_FAILED]);
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function prepareMessage($message, $recipient)
+    {
+        $child = M06Child::where('d_code', $recipient->d_code)->first();
+
+        $replacements = [
+            '{child_name}' => $child ? $child->firstname : '',
+            '{parent_name}' => $recipient->d_name ?? '',
+            '{time_remaining}' => '10',
+            '{minutes_over}' => '0',
+            '{checkout_time}' => Carbon::now()->format('Y-m-d H:i:s'),
+        ];
+
+        return str_replace(array_keys($replacements), array_values($replacements), $message);
+    }
+
+    public function getDefaultTemplates()
+    {
+        return [
+            ['name' => 'Birthday Greetings', 'slug' => 'birthday-greetings',
+             'message' => "Happy Birthday {child_name}! From all of us at Mimo Play Cafe..."],
+            ['name' => 'Time is Almost Up', 'slug' => 'timeout-reminder',
+             'message' => "FRIENDLY REMINDER FROM MIMO PLAY CAFE\n{parent_name}, your child {child_name}'s session will end in {time_remaining} minutes..."],
+            ['name' => 'Overtime', 'slug' => 'overtime-reminder',
+             'message' => "NOTICE: {child_name} has exceeded playtime by {minutes_over} minutes..."],
+            ['name' => 'Check Out', 'slug' => 'checkout-reminder',
+             'message' => "Thank you for visiting Mimo Play Cafe, {parent_name}!..."],
+        ];
+    }
+}
+```
+
+---
+
+## Phase 4: Console Commands
+
+**File:** `app/Console/Commands/NotifyBirthdays.php`
+
+```php
+<?php
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+use App\Models\SmsBlast;
+use App\Models\M06Child;
+use Carbon\Carbon;
+use App\Services\SmsBlastService;
+
+class NotifyBirthdays extends Command
+{
+    protected $signature = 'sms:birthday-greetings';
+    protected $description = 'Send automatically birthdays notifications';
+
+    public function handle(SmsBlastService $smsBlastService)
+    {
+        $blast = SmsBlast::getAutomatedBlast(SmsBlast::SLUG_BIRTHDAY);
+        if (!$blast) {
+            $this->error('Birthday greeting blast not found.');
+            return Command::FAILURE;
+        }
+
+        $items = M06Child::with('parent')
+            ->whereMonth('birthday', Carbon::now()->month)
+            ->whereDay('birthday', Carbon::now()->day)
+            ->get();
+
+        if ($items->isEmpty()) {
+            return Command::SUCCESS;
+        }
+
+        $recipientIds = [];
+        foreach ($items as $item) {
+            if ($item->parent && $item->parent->mobileno) {
+                $recipientIds[] = $item->parent->d_code;
+            }
+        }
+
+        $recipientIds = array_unique($recipientIds);
+        if (empty($recipientIds)) {
+            return Command::SUCCESS;
+        }
+
+        $result = $smsBlastService->sendBlast($blast, $recipientIds);
+        $this->info("Birthday greetings processed. Sent: {$result['sent']}, Failed: {$result['failed']}");
+        return Command::SUCCESS;
+    }
+}
+```
+
+---
+
+## Phase 5: HTTP Scheduler Layer
+
+**File:** `routes/http-reqs.php`
+
+```php
+<?php
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\RunCommandsViaHttp;
+
+Route::prefix('/run-scheduler')->group(function () {
+    Route::get('/reccured', [RunCommandsViaHttp::class, 'recurring']);
+    Route::get('/scheduled', [RunCommandsViaHttp::class, 'scheduled']);
+    Route::get('/time-based', [RunCommandsViaHttp::class, 'timeBased']);
+});
+```
+
+**File:** `app/Http/Controllers/RunCommandsViaHttp.php`
+
+```php
+<?php
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
+
+class RunCommandsViaHttp extends Controller
+{
+    private function commandCall($command, &$logs)
+    {
+        try {
+            Artisan::call($command);
+            $logs[] = "✔ {$command} executed";
+            $logs[] = trim(Artisan::output()) ?: '(no output)';
+        } catch (\Throwable $e) {
+            $logs[] = "✖ {$command} failed: " . $e->getMessage();
+        }
+    }
+
+    private function initiateScheduler($request, callable $callback)
+    {
+        if ($request->query('key') !== env('SCHEDULER_KEY')) {
+            abort(403, 'Unauthorized');
+        }
+
+        $logs = [];
+        $start = now();
+        $logs[] = "Scheduler started at: " . $start;
+
+        try {
+            $callback($logs);
+        } catch (\Exception $e) {
+            $logs[] = "Scheduler Fatal Error: " . $e->getMessage();
+        }
+
+        $end = now();
+        $logs[] = "Finished at: " . $end;
+        Log::info('Scheduler run', $logs);
+
+        return response("<pre>" . implode("\n", $logs) . "</pre>");
+    }
+
+    public function recurring(Request $request)
+    {
+        return $this->initiateScheduler($request, function (&$logs) {
+            $this->commandCall('otp:clean-expired', $logs);
+            $this->commandCall('sms:timeout-reminder', $logs);
+            $this->commandCall('sms:checkout-reminder', $logs);
+            $this->commandCall('sms:overtime-reminder', $logs);
+        });
+    }
+
+    public function scheduled(Request $request)
+    {
+        return $this->initiateScheduler($request, function (&$logs) {
+            $this->commandCall('sms:process-scheduled-blasts', $logs);
+        });
+    }
+
+    public function timeBased(Request $request)
+    {
+        return $this->initiateScheduler($request, function (&$logs) {
+            $this->commandCall('sms:birthday-greetings', $logs);
+        });
+    }
+}
+```
+
+---
+
+## Phase 6: Controller Layer
+
+**File:** `app/Http/Controllers/SmsBlastController.php`
+
+Key methods:
+- `index()` - Paginate and display blasts with stats
+- `create()` - Show create form with templates
+- `store()` - Validate and save blast (draft/scheduled/now)
+- `show()` - Display blast details with recipients
+- `edit()` - Show edit form
+- `update()` - Update existing blast
+- `resendFailed()` - Resend failed recipients
+- `destroy()` - Delete draft blast
+
+**Routes:** `routes/admin-panel.php`
+
+```php
+Route::prefix('/sms-blasts')->name('sms_blast.')->group(function () {
+    Route::get('/', [SmsBlastController::class, 'index'])->name('index');
+    Route::get('/create', [SmsBlastController::class, 'create'])->name('create');
+    Route::post('/', [SmsBlastController::class, 'store'])->name('store');
+    Route::get('/{smsBlast}', [SmsBlastController::class, 'show'])->name('show');
+    Route::get('/edit/{smsBlast}', [SmsBlastController::class, 'edit'])->name('edit');
+    Route::put('/{smsBlast}', [SmsBlastController::class, 'update'])->name('update');
+    Route::post('/{smsBlast}/resend', [SmsBlastController::class, 'resendFailed'])->name('resend-failed');
+    Route::delete('/{smsBlast}', [SmsBlastController::class, 'destroy'])->name('destroy');
+});
+```
+
+---
+
+## Phase 7: API Integration
+
+**File:** `app/Services/SendSmsService.php`
+
+```php
+<?php
+namespace App\Services;
+
+class SendSmsService
+{
+    public static function sendnowsms($to, $msg)
+    {
+        $mobile = static::formatPHNumber($to);
+        $destination = $mobile;
+        $message = html_entity_decode($msg, ENT_QUOTES, 'utf-8');
+        $message = urlencode($message);
+
+        $username = urlencode(config('services.isms.user'));
+        $password = urlencode(config('services.isms.password'));
+        $sender_id = urlencode(config('services.isms.sender_id'));
+        $type = config('services.isms.type');
+
+        $url = config('services.isms.api') . "?un={$username}&pwd={$password}&dstno={$destination}&msg={$message}&type={$type}&sendid={$sender_id}&agreedterm=YES";
+        
+        $response = static::ismscURL($url);
+
+        return $response['status'] == 200
+            ? ['success' => true, 'response' => $response['result']]
+            : ['success' => false, 'status' => $response['status'], 'response' => $response['result']];
+    }
+
+    private static function formatPHNumber($number)
+    {
+        $number = preg_replace('/[^0-9]/', '', $number);
+        if (substr($number, 0, 2) === '63') return $number;
+        if (substr($number, 0, 1) === '0') return '63' . substr($number, 1);
+        if (strlen($number) === 10 && substr($number, 0, 1) === '9') return '63' . $number;
+        return $number;
+    }
+
+    private static function ismscURL($link)
+    {
+        $http = curl_init($link);
+        curl_setopt($http, CURLOPT_RETURNTRANSFER, TRUE);
+        $http_result = curl_exec($http);
+        $http_status = curl_getinfo($http, CURLINFO_HTTP_CODE);
+        curl_close($http);
+        return ['status' => $http_status, 'result' => $http_result];
+    }
+}
+```
+
+---
+
+## Phase 8: Kernel Configuration
 
 **File:** `app/Console/Kernel.php`
 
 ```php
-protected function schedule(Schedule $schedule)
+protected function schedule(Schedule $schedule): void
 {
-    // Existing timeout notifications
-    $schedule->command('app:check-timeouts')
-             ->everyFiveMinutes();
-    
-    // New automations
-    $schedule->command('sms:birthday-greetings')
-             ->dailyAt('06:00');
-             
-    $schedule->command('sms:overtime-alerts')
-             ->everyFifteenMinutes();
-             
-    $schedule->command('sms:process-scheduled')
-             ->everyMinute();
-             
-    $schedule->command('sms:reactivation-campaign')
-             ->weeklyOn(1, '09:00'); // Mondays
-    
-    // Seasonal campaigns - runs hourly
-    $schedule->command('sms:run-campaigns')
-             ->hourly();
+    // Note: Automations are triggered via HTTP endpoints in RunCommandsViaHttp
+    // External cron jobs call: /run-scheduler/reccured, /run-scheduler/scheduled, /run-scheduler/time-based
 }
-```
-
-**Server Cron:**
-```bash
-* * * * * cd /path-to-your-project && php artisan schedule:run >> /dev/null 2>&1
-```
-
-Ensure this is in your server's crontab.
-
----
-
-## Monitoring & Alerting
-
-### 1. Dashboard Metrics
-
-**Add to Admin Dashboard:**
-```php
-Stats to Display:
-- Scheduled blasts count
-- Pending automated sends (last 24h)
-- Failed SMS rate (last 7 days)
-- automation execution log (last 10 runs)
-```
-
-### 2. Failed SMS Retry Logic
-
-In `SmsBlastService::sendToRecipient()`:
-```php
-private function sendToRecipient(SmsBlast $blast, $recipient)
-{
-    $attempts = 0;
-    $maxAttempts = 3;
-    
-    while ($attempts < $maxAttempts) {
-        $result = SendSmsService::sendnowsms(...);
-        
-        if ($result['success']) {
-            return $result;
-        }
-        
-        $attempts++;
-        if ($attempts < $maxAttempts) {
-            sleep(pow(2, $attempts)); // Exponential backoff
-        }
-    }
-    
-    // Mark as failed after retries
-    return ['success' => false, 'message' => 'Max retries exceeded'];
-}
-```
-
-### 3. Email Alerts for Failures
-
-```php
-if ($failedRate > 0.2) { // >20% failure rate
-    Mail::raw("High SMS failure rate detected: {$failedRate}%", function($msg) {
-        $msg->to('admin@playhouse.com')
-            ->subject('SMS Blast Alert');
-    });
-}
-```
-
----
-
-## Best Practices & Recommendations
-
-### 1. Rate Limiting
-
-iSMS provider may have limits. Implement:
-
-```php
-// In command handle()
-$batchSize = 50;
-$recipients->chunk($batchSize, function($batch) {
-    foreach ($batch as $recipient) {
-        $this->sendToRecipient($recipient);
-        sleep(1); // 1-second delay between sends
-    }
-});
-```
-
-### 2. Message Queueing (Advanced)
-
-For high volume (1000+ SMS/day), migrate to Laravel Queues:
-
-```bash
-php artisan queue:work --tries=3
-```
-
-Refactor `sendToRecipient()` to dispatch `SendSmsJob` instead of immediate send.
-
-### 3. Template Management
-
-Create admin UI for editing templates instead of hardcoded array.
-
-**Migration:**
-```php
-Schema::create('sms_templates', function (Blueprint $table) {
-    $table->id();
-    $table->string('slug')->unique();
-    $table->string('name');
-    $table->text('message');
-    $table->boolean('is_active')->default(true);
-    $table->timestamps();
-});
-```
-
-**Service:** `TemplateManagementService` with caching.
-
-### 4. Opt-Out / Compliance
-
-Add `sms_opt_out` column to `M06` table:
-
-```php
-Schema::table('m06', function (Blueprint $table) {
-    $table->boolean('sms_opt_out')->default(false);
-    $table->timestamp('sms_opt_out_at')->nullable();
-});
-```
-
-Filter queries: `->where('sms_opt_out', false)`
-
-### 5. Duplicate Prevention
-
-Create `notification_logs` table:
-
-```php
-Schema::create('notification_logs', function (Blueprint $table) {
-    $table->id();
-    $table->string('recipient_id'); // M06 d_code
-    $table->string('automation_type');
-    $table->date('sent_date');
-    $table->timestamps();
-    $table->unique(['recipient_id', 'automation_type', 'sent_date']);
-});
-```
-
-Check before sending:
-```php
-$alreadySent = NotificationLog::where('recipient_id', $recipient->d_code)
-    ->where('automation_type', 'birthday')
-    ->whereDate('sent_date', today())
-    ->exists();
-
-if (!$alreadySent) {
-    // Send SMS
-}
-```
-
----
-
-## Testing Strategy
-
-### 1. Unit Tests
-
-**Test Cases:**
-- `SmsBlastService::processScheduledBlasts()` returns correct count
-- `SendSmsService::formatPHNumber()` correctly formats various inputs
-- Template parser replaces all variables
-
-### 2. Feature Tests
-
-```php
-public function test_birthday_greeting_command_sends_to_children_with_birthday_today()
-{
-    // Arrange: Create child with birthday today
-    // Act: Run command
-    // Assert: SMS sent, log created, blast record exists
-}
-```
-
-### 3. Dry-Run Mode
-
-Add `--dry-run` flag to commands:
-
-```bash
-php artisan sms:birthday-greetings --dry-run
-```
-
-Outputs:
-```
-[DRY RUN] Would send 12 birthday messages
-- Maria Santos (0917-123-4567) for child: Juan Santos
-- ...
-```
-
-### 4. Mock iSMS API
-
-Use Laravel's HTTP fake in tests:
-
-```php
-Http::fake([
-    'www.isms.com.my/*' => Http::response('OK', 200)
-]);
 ```
 
 ---
 
 ## Deployment Checklist
 
-- [ ] All artisan commands registered in `Kernel.php`
-- [ ] Server cron running `schedule:run` every minute
-- [ ] Queue worker running (if using queues)
-- [ ] `.env` iSMS credentials configured
-- [ ] Admin notification preferences set (email alerts)
-- [ ] Monitoring dashboard created
-- [ ] Dry-run tests on staging environment
-- [ ] Backup rollback plan documented
-
----
-
-## Cost Estimation
-
-**Current iSMS Rate:** ₱1.50 per SMS (from mockup)
-
-**Monthly Projections:**
-
-| Automation | Daily Volume | Monthly Cost |
-|------------|-------------|--------------|
-| Birthday Greetings | 5-10 SMS/day | ₱225-450 |
-| Timeout Reminders | 20-30 SMS/day | ₱900-1,350 |
-| Overtime Alerts | 2-5 SMS/day | ₱90-225 |
-| Follow-Up | 10-15 SMS/day | ₱450-675 |
-| **Total (Est.)** | **~50 SMS/day** | **₱1,665-2,700** |
-
-**Note:** Adjust based on actual customer volume.
-
----
-
-## Future Enhancements
-
-1. **Two-Way SMS:** Receive replies from parents (requires iSMS inbound feature)
-2. **Rich Media:** Send MMS with playground photos
-3. **Personalization Engine:** Machine learning to recommend optimal send times
-4. **A/B Testing:** Test message variants, measure response rates
-5. **Webhook Integration:** Real-time sync with iSMS delivery receipts
-6. **Multi-Channel:** Fallback to email if SMS fails (requires email service integration)
-7. **SMS Survey:** Post-visit satisfaction survey via SMS
-
----
-
-## Conclusion
-
-The existing SMS blast module provides a solid foundation. By adding scheduled automation via Laravel Scheduler, you can:
-
-- ✅ Reduce manual admin workload
-- ✅ Improve customer experience through timely, relevant messages
-- ✅ Increase retention and repeat visits
-- ✅ Proactive issue resolution (overtime alerts)
-- 💰 Potential revenue uplift through targeted promotions
-
-**Next Steps:**
-1. Prioritize by business impact (Birthday + Scheduled Blasts Daemon = immediate wins)
-2. Implement one automation as proof-of-concept
-3. Monitor delivery rates and user feedback
-4. Iterate and expand to other use cases
+- [x] Models created and migrated
+- [x] Service layer implemented
+- [x] Console commands registered
+- [x] HTTP scheduler endpoints created
+- [x] Controller and routes configured
+- [ ] `.env` configured with `SCHEDULER_KEY` and iSMS credentials
+- [ ] Cron jobs configured on server
+- [ ] SMS templates reviewed and tested
