@@ -1,4 +1,4 @@
-<footer class="sm:fixed relative bottom-0 group w-full px-5 py-1 bg-[var(--color-primary)] backdrop-blur-xl opacity-70">
+<footer class="sm:fixed relative bottom-0 group w-full px-5 py-1 bg-[var(--color-primary)] backdrop-blur-xl opacity-60 z-80">
     <section class="flex flex-col sm:flex-row justify-between">
         <div class="flex flex-col sm:flex-row sm:gap-8 text-xs sm:text-sm">
             <p class="font-bold">Powered by Right Apps Incorporated</p>
